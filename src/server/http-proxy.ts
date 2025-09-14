@@ -1,6 +1,12 @@
 import { ClientManager } from './client-manager';
 import { HttpRequestPayload, HttpResponsePayload } from '../shared/types';
 
+interface RouteInfo {
+  clientId?: string;
+  targetPath: string;
+  routeType: 'specific' | 'balanced';
+}
+
 export class HttpProxyHandler {
   private clientManager: ClientManager;
   private requestTimeout: number;
@@ -8,6 +14,35 @@ export class HttpProxyHandler {
   constructor(clientManager: ClientManager, requestTimeout: number = 30000) {
     this.clientManager = clientManager;
     this.requestTimeout = requestTimeout;
+  }
+
+  /**
+   * Parse the incoming request path to determine routing strategy
+   * Routes:
+   * - /client/{clientId}/* -> route to specific client
+   * - /api/* -> balanced routing across all clients  
+   * - /* -> balanced routing (default)
+   */
+  private parseRoute(path: string): RouteInfo {
+    // Match /client/{clientId}/...
+    const clientRouteMatch = path.match(/^\/client\/([^\/]+)(\/.*)?$/);
+    
+    if (clientRouteMatch) {
+      const clientId = clientRouteMatch[1];
+      const targetPath = clientRouteMatch[2] || '/';
+      
+      return {
+        clientId,
+        targetPath,
+        routeType: 'specific'
+      };
+    }
+
+    // For /api/* or any other path, use balanced routing
+    return {
+      targetPath: path,
+      routeType: 'balanced'
+    };
   }
 
   public async handleRequest(request: {
@@ -19,18 +54,37 @@ export class HttpProxyHandler {
     query?: Record<string, any>;
   }): Promise<HttpResponsePayload> {
     
-    // Find an available client
-    const client = this.clientManager.getAvailableClient();
-    if (!client) {
-      throw new Error('No connected clients available');
+    const route = this.parseRoute(request.path);
+    let client;
+
+    if (route.routeType === 'specific') {
+      // Route to specific client
+      client = this.clientManager.getClient(route.clientId!);
+      
+      if (!client) {
+        throw new Error(`Client '${route.clientId}' not found`);
+      }
+      
+      if (!client.connected) {
+        throw new Error(`Client '${route.clientId}' (${client.name}) is not connected`);
+      }
+
+      console.log(`🎯 Routing request ${request.id} to specific client ${client.name} (${client.id})`);
+    } else {
+      // Balanced routing across all clients
+      client = this.clientManager.getAvailableClient();
+      
+      if (!client) {
+        throw new Error('No connected clients available');
+      }
+
+      console.log(`🔄 Routing request ${request.id} to balanced client ${client.name} (${client.id})`);
     }
 
-    console.log(`🔄 Routing request ${request.id} to client ${client.name} (${client.id})`);
-
-    // Prepare the request payload
+    // Prepare the request payload with the target path
     const requestPayload: HttpRequestPayload = {
       method: request.method,
-      path: request.path,
+      path: route.targetPath, // Use the parsed target path
       headers: this.sanitizeHeaders(request.headers),
       body: request.body,
       query: request.query || {},
@@ -50,6 +104,51 @@ export class HttpProxyHandler {
     });
   }
 
+  /**
+   * Send request to specific client by ID
+   */
+  public async handleRequestToClient(
+    clientId: string,
+    request: {
+      id: string;
+      method: string;
+      path: string;
+      headers: Record<string, string>;
+      body?: string;
+      query?: Record<string, any>;
+    }
+  ): Promise<HttpResponsePayload> {
+    
+    const client = this.clientManager.getClient(clientId);
+    if (!client) {
+      throw new Error(`Client '${clientId}' not found`);
+    }
+    
+    if (!client.connected) {
+      throw new Error(`Client '${clientId}' (${client.name}) is not connected`);
+    }
+
+    console.log(`🎯 Direct request ${request.id} to client ${client.name} (${client.id})`);
+
+    const requestPayload: HttpRequestPayload = {
+      method: request.method,
+      path: request.path,
+      headers: this.sanitizeHeaders(request.headers),
+      body: request.body,
+      query: request.query || {},
+    };
+
+    return new Promise<HttpResponsePayload>((resolve, reject) => {
+      this.clientManager.addPendingRequest(request.id, client.id, resolve, reject);
+
+      const success = this.sendRequestToClient(client.id, request.id, requestPayload);
+      
+      if (!success) {
+        this.clientManager.rejectRequest(request.id, new Error('Failed to send request to client'));
+      }
+    });
+  }
+
   private sendRequestToClient(clientId: string, requestId: string, payload: HttpRequestPayload): boolean {
     const client = this.clientManager.getClient(clientId);
     if (!client || !client.connected) {
@@ -61,6 +160,7 @@ export class HttpProxyHandler {
         id: requestId,
         type: 'request',
         timestamp: Date.now(),
+        clientId,
         payload,
       }));
       return true;
@@ -96,10 +196,22 @@ export class HttpProxyHandler {
     return sanitized;
   }
 
+  /**
+   * Get routing information for a path
+   */
+  public getRouteInfo(path: string): RouteInfo {
+    return this.parseRoute(path);
+  }
+
   public getStats() {
     return {
       requestTimeout: this.requestTimeout,
       clientStats: this.clientManager.getStats(),
+      supportedRoutes: [
+        '/client/{clientId}/* - Route to specific client',
+        '/api/* - Balanced routing across all clients',
+        '/* - Default balanced routing'
+      ]
     };
   }
 }
