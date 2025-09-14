@@ -1,0 +1,23 @@
+{
+  "name": "tunnel-client", 
+  "script": "dist/client/index.js",
+  "instances": 1,
+  "exec_mode": "fork",
+  "watch": false,
+  "max_memory_restart": "512M",
+  "env": {
+    "NODE_ENV": "production",
+    "SERVER_WS_URL": "ws://89.111.171.15:3001",
+    "LOCAL_TARGET": "http://localhost:8000",
+    "CLIENT_ID": "production-client-1",
+    "CLIENT_NAME": "Production PC Client"
+  },
+  "error_file": "./logs/client-error.log",
+  "out_file": "./logs/client-out.log", 
+  "log_file": "./logs/client-combined.log",
+  "time": true,
+  "restart_delay": 5000,
+  "max_restarts": 15,
+  "min_uptime": "5s",
+  "exp_backoff_restart_delay": 100
+}
