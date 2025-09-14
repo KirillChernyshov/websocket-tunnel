@@ -12,6 +12,22 @@ const CONFIG = {
   HEARTBEAT_INTERVAL: 30000, // 30 seconds
 };
 
+// Helper function to get HTTP server URL from WebSocket URL
+function getHttpServerUrl(wsUrl: string): string {
+  try {
+    const url = new URL(wsUrl);
+    const protocol = url.protocol === 'wss:' ? 'https:' : 'http:';
+    const port = url.port || (url.protocol === 'wss:' ? '443' : '80');
+    // Default HTTP port is usually WS_PORT - 1 (3000 vs 3001)
+    const httpPort = url.port === '3001' ? '3000' : (parseInt(port) - 1).toString();
+    return `${protocol}//${url.hostname}:${httpPort}`;
+  } catch {
+    return 'http://localhost:3000';
+  }
+}
+
+const HTTP_SERVER_URL = getHttpServerUrl(CONFIG.SERVER_URL);
+
 console.log('🚀 Starting WebSocket Tunnel Client');
 console.log(`📡 Server URL: ${CONFIG.SERVER_URL}`);
 console.log(`🎯 Local Target: ${CONFIG.LOCAL_TARGET}`);
@@ -26,6 +42,53 @@ const wsClient = new TunnelWebSocketClient(CONFIG.SERVER_URL, {
   reconnectInterval: CONFIG.RECONNECT_INTERVAL,
   heartbeatInterval: CONFIG.HEARTBEAT_INTERVAL,
 });
+
+// Function to display routing information
+function displayRoutingInfo() {
+  console.log('');
+  console.log('🎯 ========================================');
+  console.log('🎯 ТУННЕЛЬ ГОТОВ К ИСПОЛЬЗОВАНИЮ!');
+  console.log('🎯 ========================================');
+  console.log('');
+  console.log(`📍 Постоянный адрес клиента:`);
+  console.log(`   ${HTTP_SERVER_URL}/client/${CONFIG.CLIENT_ID}`);
+  console.log('');
+  console.log('🌐 Примеры использования:');
+  console.log('');
+  console.log('  📄 Статические файлы:');
+  console.log(`     ${HTTP_SERVER_URL}/client/${CONFIG.CLIENT_ID}/index.html`);
+  console.log(`     ${HTTP_SERVER_URL}/client/${CONFIG.CLIENT_ID}/api/status`);
+  console.log('');
+  console.log('  🔄 API запросы:');
+  console.log(`     GET  ${HTTP_SERVER_URL}/client/${CONFIG.CLIENT_ID}/api/users`);
+  console.log(`     POST ${HTTP_SERVER_URL}/client/${CONFIG.CLIENT_ID}/api/data`);
+  console.log(`     PUT  ${HTTP_SERVER_URL}/client/${CONFIG.CLIENT_ID}/api/settings`);
+  console.log('');
+  console.log('  🧪 Тестовые запросы:');
+  console.log(`     curl "${HTTP_SERVER_URL}/client/${CONFIG.CLIENT_ID}/api/test"`);
+  console.log(`     curl "${HTTP_SERVER_URL}/client/${CONFIG.CLIENT_ID}/health"`);
+  console.log('');
+  console.log('  🔍 Управление клиентом:');
+  console.log(`     curl "${HTTP_SERVER_URL}/clients/${CONFIG.CLIENT_ID}"`);
+  console.log(`     curl "${HTTP_SERVER_URL}/client/${CONFIG.CLIENT_ID}/health"`);
+  console.log('');
+  console.log('  📊 Из браузера:');
+  console.log(`     ${HTTP_SERVER_URL}/client/${CONFIG.CLIENT_ID}/`);
+  console.log('');
+  console.log('⚖️  Балансированная маршрутизация (любой клиент):');
+  console.log(`     ${HTTP_SERVER_URL}/api/endpoint`);
+  console.log('');
+  console.log('📋 Информация о системе:');
+  console.log(`     ${HTTP_SERVER_URL}/clients           # Список всех клиентов`);
+  console.log(`     ${HTTP_SERVER_URL}/health            # Статус сервера`);
+  console.log(`     ${HTTP_SERVER_URL}/status            # Подробная информация`);
+  console.log('');
+  console.log('🎯 ========================================');
+  console.log(`🎯 Локальное приложение: ${CONFIG.LOCAL_TARGET}`);
+  console.log(`🎯 Доступно через туннель: ${HTTP_SERVER_URL}/client/${CONFIG.CLIENT_ID}`);
+  console.log('🎯 ========================================');
+  console.log('');
+}
 
 // Handle incoming requests from the server
 wsClient.onRequest(async (requestId, payload) => {
@@ -60,6 +123,7 @@ wsClient.onConnect(() => {
 
 wsClient.onDisconnect(() => {
   console.log('❌ Disconnected from tunnel server');
+  console.log('🔄 Tunnel temporarily unavailable...');
 });
 
 wsClient.onError((error) => {
@@ -69,8 +133,12 @@ wsClient.onError((error) => {
 wsClient.onRegister((confirmed) => {
   if (confirmed) {
     console.log('✅ Successfully registered with server');
+    console.log(`🎉 Client "${CONFIG.CLIENT_NAME}" (${CONFIG.CLIENT_ID}) is now online!`);
+    
+    // Display routing information after successful registration
+    displayRoutingInfo();
   } else {
-    console.log('📝 Registration requested');
+    console.log('📝 Registration requested...');
   }
 });
 
@@ -79,7 +147,9 @@ wsClient.connect();
 
 // Graceful shutdown
 process.on('SIGINT', () => {
+  console.log('');
   console.log('🛑 Shutting down client...');
+  console.log(`🔌 Tunnel ${HTTP_SERVER_URL}/client/${CONFIG.CLIENT_ID} will be unavailable`);
   wsClient.disconnect();
   process.exit(0);
 });

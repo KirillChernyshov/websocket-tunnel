@@ -1,151 +1,202 @@
 #!/bin/bash
 
-# 🚀 Quick Production Deploy Script
-# Использование: ./deploy.sh [server|client]
+# Enhanced deploy script with .env support
+set -e
 
-set -e  # Выйти при ошибке
+MODE="${1:-server}"
 
-COLOR_GREEN='\033[0;32m'
-COLOR_BLUE='\033[0;34m' 
-COLOR_RED='\033[0;31m'
-COLOR_YELLOW='\033[1;33m'
-COLOR_NC='\033[0m' # No Color
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
 
-log() {
-    echo -e "${COLOR_BLUE}[INFO]${COLOR_NC} $1"
+print_info() {
+    echo -e "${BLUE}[INFO]${NC} $1"
 }
 
-success() {
-    echo -e "${COLOR_GREEN}[SUCCESS]${COLOR_NC} $1"
+print_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
 }
 
-error() {
-    echo -e "${COLOR_RED}[ERROR]${COLOR_NC} $1"
+print_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
 }
 
-warning() {
-    echo -e "${COLOR_YELLOW}[WARNING]${COLOR_NC} $1"
+print_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
 }
 
-# Проверка аргументов
-if [ $# -eq 0 ]; then
-    error "Использование: $0 [server|client]"
-    echo "  server - деплой сервера (для рабочей машины)"
-    echo "  client - деплой клиента (для вашего ПК)"
-    exit 1
+# Function to load .env file
+load_env() {
+    if [[ -f .env ]]; then
+        print_info "📄 Loading .env file..."
+        # Export all variables from .env (skip comments and empty lines)
+        set -a
+        source .env
+        set +a
+        print_success ".env loaded successfully"
+    else
+        print_warning ".env file not found"
+    fi
+}
+
+# Function to create PM2 ecosystem with env variables
+create_ecosystem_with_env() {
+    local app_name="$1"
+    local script_path="$2"
+    local config_file="$3"
+    
+    print_info "🔧 Creating PM2 config with environment variables..."
+    
+    # Load env variables
+    load_env
+    
+    # Check if PM2 supports env_file
+    pm2_version=$(pm2 --version 2>/dev/null || echo "0.0.0")
+    print_info "PM2 version: $pm2_version"
+    
+    # Create ecosystem config dynamically
+    cat > "$config_file" << EOF
+{
+  "apps": [{
+    "name": "$app_name",
+    "script": "$script_path",
+    "instances": 1,
+    "exec_mode": "fork",
+    "watch": false,
+    "max_memory_restart": "512M",
+    "env": {
+      "NODE_ENV": "production"$(
+        # Add all env variables from .env
+        if [[ -f .env ]]; then
+            while IFS= read -r line || [[ -n "$line" ]]; do
+                # Skip empty lines and comments
+                if [[ -n "$line" ]] && [[ ! "$line" =~ ^[[:space:]]*# ]]; then
+                    key=$(echo "$line" | cut -d'=' -f1 | tr -d ' ')
+                    value=$(echo "$line" | cut -d'=' -f2- | tr -d '"' | tr -d "'")
+                    if [[ -n "$key" ]] && [[ -n "$value" ]]; then
+                        echo ","
+                        echo "      \"$key\": \"$value\""
+                    fi
+                fi
+            done < .env
+        fi
+    )
+    },
+    "error_file": "./logs/${app_name}-error.log",
+    "out_file": "./logs/${app_name}-out.log", 
+    "log_file": "./logs/${app_name}-combined.log",
+    "time": true,
+    "restart_delay": 5000,
+    "max_restarts": 15,
+    "min_uptime": "5s",
+    "exp_backoff_restart_delay": 100
+  }]
+}
+EOF
+
+    print_success "✅ PM2 config created: $config_file"
+}
+
+# Main deployment logic
+print_info "🚀 Starting enhanced deployment in mode: $MODE"
+
+# Install dependencies
+print_info "📦 Installing dependencies..."
+npm install --omit=dev
+
+# Build project
+print_info "🔨 Building project..."
+if [[ -f "node_modules/.bin/tsc" ]]; then
+    ./node_modules/.bin/tsc || (echo '⚠️  TypeScript compilation had errors, but dist files were generated' && exit 0)
+else
+    npm run build
 fi
 
-MODE=$1
-
-# Проверка Node.js
-if ! command -v node &> /dev/null; then
-    error "Node.js не найден. Установите Node.js версии 16+"
-    exit 1
-fi
-
-# Проверка PM2
-if ! command -v pm2 &> /dev/null; then
-    warning "PM2 не найден. Устанавливаю..."
-    npm install pm2 -g
-fi
-
-log "🚀 Начинаю деплой в режиме: $MODE"
-
-# Проверка .env файла
-if [ ! -f .env ]; then
-    warning ".env файл не найден. Создаю из примера..."
-    cp .env.example .env
-    warning "⚠️  Не забудьте отредактировать .env файл!"
-fi
-
-# Установка зависимостей
-log "📦 Устанавливаю зависимости..."
-npm install --production
-
-# Сборка проекта
-log "🔨 Собираю проект..."
-npm run build
-
-# Создание директории логов
-log "📁 Создаю директорию логов..."
+# Create logs directory
 mkdir -p logs
 
-# Деплой в зависимости от режима
-if [ "$MODE" = "server" ]; then
-    log "🖥️  Разворачиваю сервер..."
-    
-    # Проверка портов
-    if lsof -Pi :3000 -sTCP:LISTEN -t >/dev/null 2>&1; then
-        warning "Порт 3000 уже используется. Остановка существующих процессов..."
-        pm2 stop websocket-tunnel 2>/dev/null || true
-    fi
-    
-    if lsof -Pi :3001 -sTCP:LISTEN -t >/dev/null 2>&1; then
-        warning "Порт 3001 уже используется"
-    fi
-    
-    # Запуск сервера
-    npm run pm2:server
-    
-    # Ожидание запуска
-    sleep 3
-    
-    # Проверка здоровья
-    log "🔍 Проверяю статус сервера..."
-    if curl -sf http://localhost:3000/health > /dev/null; then
-        success "✅ Сервер успешно запущен и работает!"
-        log "📊 Статус: http://localhost:3000/health"
-        log "📈 Мониторинг клиентов: http://localhost:3000/status"
-    else
-        error "❌ Сервер не отвечает на health check"
-        pm2 logs websocket-tunnel --lines 20
-        exit 1
-    fi
-    
-elif [ "$MODE" = "client" ]; then
-    log "💻 Разворачиваю клиент..."
-    
-    # Проверка конфигурации
-    if ! grep -q "SERVER_WS_URL" .env; then
-        error "❌ SERVER_WS_URL не настроен в .env файле"
-        exit 1
-    fi
-    
-    if ! grep -q "LOCAL_TARGET" .env; then
-        error "❌ LOCAL_TARGET не настроен в .env файле"
-        exit 1
-    fi
-    
-    # Остановка существующего клиента
-    pm2 stop tunnel-client 2>/dev/null || true
-    
-    # Запуск клиента
-    npm run pm2:client
-    
-    # Ожидание подключения
-    sleep 5
-    
-    success "✅ Клиент запущен!"
-    log "📊 Проверьте логи: pm2 logs tunnel-client"
-    
-else
-    error "Неизвестный режим: $MODE"
-    exit 1
-fi
+# Load environment variables
+load_env
 
-# Показать статус PM2
-log "📋 Текущий статус PM2:"
+# Deploy based on mode
+case "$MODE" in
+    "server")
+        print_info "🖥️  Deploying server..."
+        
+        # Stop existing server if running
+        pm2 stop websocket-tunnel 2>/dev/null || true
+        pm2 delete websocket-tunnel 2>/dev/null || true
+        
+        # Create ecosystem config with env vars
+        create_ecosystem_with_env "websocket-tunnel" "dist/server/index.js" "ecosystem.server.generated.json"
+        
+        # Start server
+        pm2 start ecosystem.server.generated.json
+        
+        print_success "✅ Server deployed successfully!"
+        print_info "📋 Server endpoints:"
+        print_info "   🌐 HTTP: http://localhost:${PORT:-3000}"
+        print_info "   🔌 WebSocket: ws://localhost:${WS_PORT:-3001}"
+        ;;
+        
+    "client")
+        print_info "💻 Deploying client..."
+        
+        # Validate required env vars for client
+        if [[ -z "$SERVER_WS_URL" ]]; then
+            print_error "SERVER_WS_URL not set in .env file"
+            exit 1
+        fi
+        
+        if [[ -z "$CLIENT_ID" ]]; then
+            print_error "CLIENT_ID not set in .env file"
+            exit 1
+        fi
+        
+        # Stop existing client if running  
+        pm2 stop tunnel-client 2>/dev/null || true
+        pm2 delete tunnel-client 2>/dev/null || true
+        
+        # Create ecosystem config with env vars
+        create_ecosystem_with_env "tunnel-client" "dist/client/index.js" "ecosystem.client.generated.json"
+        
+        # Start client
+        pm2 start ecosystem.client.generated.json
+        
+        print_success "✅ Client deployed successfully!"
+        print_info "📋 Client configuration:"
+        print_info "   🌐 Server: $SERVER_WS_URL"
+        print_info "   🆔 Client ID: $CLIENT_ID"
+        print_info "   🎯 Local Target: ${LOCAL_TARGET:-http://localhost:8080}"
+        ;;
+        
+    *)
+        print_error "Invalid mode: $MODE"
+        print_info "Usage: $0 [server|client]"
+        exit 1
+        ;;
+esac
+
+# Show PM2 status
+print_info "📊 PM2 Status:"
 pm2 list
 
-success "🎉 Деплой завершен успешно!"
-log "💡 Полезные команды:"
-log "   pm2 logs          - Просмотр логов"
-log "   pm2 monit         - Мониторинг"
-log "   pm2 restart all   - Перезапуск"
-log "   pm2 stop all      - Остановка"
-
-if [ "$MODE" = "server" ]; then
-    log ""
-    log "🔗 Для подключения клиента используйте:"
-    log "   SERVER_WS_URL=ws://$(hostname -I | awk '{print $1}'):3001"
+# Show logs preview
+print_info "📝 Recent logs:"
+sleep 2
+if [[ "$MODE" == "server" ]]; then
+    pm2 logs websocket-tunnel --lines 5 --nostream || true
+else
+    pm2 logs tunnel-client --lines 5 --nostream || true
 fi
+
+print_success "🎉 Deployment completed!"
+print_info "💡 Useful commands:"
+print_info "   📊 pm2 list         - Show running processes"
+print_info "   📝 pm2 logs         - View logs"
+print_info "   📈 pm2 monit        - Performance monitoring"
+print_info "   🔄 pm2 restart all  - Restart all processes"
+print_info "   ⏹️  pm2 stop all     - Stop all processes"

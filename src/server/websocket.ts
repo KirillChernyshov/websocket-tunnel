@@ -7,10 +7,12 @@ export class TunnelWebSocketServer {
   private wss: WebSocketServer;
   private clientManager: ClientManager;
   private heartbeatInterval: NodeJS.Timeout;
+  private httpPort: number;
 
-  constructor(wss: WebSocketServer, clientManager: ClientManager) {
+  constructor(wss: WebSocketServer, clientManager: ClientManager, httpPort: number = 3000) {
     this.wss = wss;
     this.clientManager = clientManager;
+    this.httpPort = httpPort;
 
     this.setupWebSocketServer();
     this.startHeartbeat();
@@ -76,11 +78,16 @@ export class TunnelWebSocketServer {
 
   private handleRegister(ws: WebSocket, message: TunnelMessage) {
     const clientId = message.clientId || uuidv4();
+    const clientName = message.payload?.name || 'Unknown Client';
+    
     const clientInfo = this.clientManager.registerClient(clientId, ws, {
-      name: message.payload?.name || 'Unknown Client',
+      name: clientName,
     });
     
     console.log(`✅ Client registered: ${clientInfo.id} (${clientInfo.name})`);
+    
+    // Display routing information for the new client
+    this.displayClientRoutingInfo(clientInfo.id, clientInfo.name);
     
     // Confirm registration
     this.sendMessage(ws, {
@@ -90,6 +97,36 @@ export class TunnelWebSocketServer {
       clientId: clientInfo.id,
       payload: { confirmed: true }
     });
+  }
+
+  private displayClientRoutingInfo(clientId: string, clientName: string) {
+    console.log('');
+    console.log('📡 ========================================');
+    console.log(`📡 НОВЫЙ КЛИЕНТ ПОДКЛЮЧЕН: ${clientName}`);
+    console.log('📡 ========================================');
+    console.log('');
+    console.log(`🆔 Client ID: ${clientId}`);
+    console.log(`📍 Постоянный адрес: http://localhost:${this.httpPort}/client/${clientId}`);
+    console.log('');
+    console.log('🌐 Примеры обращения к клиенту:');
+    console.log(`   curl "http://localhost:${this.httpPort}/client/${clientId}/api/status"`);
+    console.log(`   curl "http://localhost:${this.httpPort}/client/${clientId}/health"`);
+    console.log(`   curl "http://localhost:${this.httpPort}/client/${clientId}/"`);
+    console.log('');
+    console.log('🔍 Управление клиентом:');
+    console.log(`   curl "http://localhost:${this.httpPort}/clients/${clientId}"`);
+    console.log(`   curl "http://localhost:${this.httpPort}/client/${clientId}/health"`);
+    console.log('');
+    console.log('📊 Общая информация:');
+    console.log(`   curl "http://localhost:${this.httpPort}/clients"           # Все клиенты`);
+    console.log(`   curl "http://localhost:${this.httpPort}/status"            # Статус системы`);
+    console.log('');
+    
+    // Show total connected clients
+    const totalClients = this.clientManager.getConnectedClients().length;
+    console.log(`📈 Всего подключено клиентов: ${totalClients}`);
+    console.log('📡 ========================================');
+    console.log('');
   }
 
   private handleResponse(message: TunnelMessage) {

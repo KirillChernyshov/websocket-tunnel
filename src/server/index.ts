@@ -26,7 +26,7 @@ const CONFIG = {
 // Initialize components
 const clientManager = new ClientManager();
 const wss = new WebSocketServer({ port: CONFIG.WS_PORT });
-const tunnelWs = new TunnelWebSocketServer(wss, clientManager);
+const tunnelWs = new TunnelWebSocketServer(wss, clientManager, CONFIG.HTTP_PORT);
 const proxyHandler = new HttpProxyHandler(clientManager, CONFIG.REQUEST_TIMEOUT);
 
 // ===== CLIENT MANAGEMENT API =====

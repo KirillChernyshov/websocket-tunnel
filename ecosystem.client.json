@@ -5,12 +5,9 @@
   "exec_mode": "fork",
   "watch": false,
   "max_memory_restart": "512M",
+  "env_file": ".env",
   "env": {
-    "NODE_ENV": "production",
-    "SERVER_WS_URL": "ws://89.111.171.15:3001",
-    "LOCAL_TARGET": "http://localhost:8000",
-    "CLIENT_ID": "production-client-1",
-    "CLIENT_NAME": "Production PC Client"
+    "NODE_ENV": "production"
   },
   "error_file": "./logs/client-error.log",
   "out_file": "./logs/client-out.log", 
