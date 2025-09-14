@@ -105,15 +105,11 @@ print_info "🚀 Starting enhanced deployment in mode: $MODE"
 
 # Install dependencies
 print_info "📦 Installing dependencies..."
-npm install --omit=dev
+npm install
 
 # Build project
 print_info "🔨 Building project..."
-if [[ -f "node_modules/.bin/tsc" ]]; then
-    ./node_modules/.bin/tsc || (echo '⚠️  TypeScript compilation had errors, but dist files were generated' && exit 0)
-else
-    npm run build
-fi
+npm run build
 
 # Create logs directory
 mkdir -p logs
@@ -151,8 +147,12 @@ case "$MODE" in
             exit 1
         fi
         
-        if [[ -z "$CLIENT_ID" ]]; then
-            print_error "CLIENT_ID not set in .env file"
+        # Check if mappings.json exists
+        if [[ ! -f "mappings.json" ]]; then
+            print_error "mappings.json not found!"
+            print_info "Please create it from example:"
+            print_info "  cp mappings.json.example mappings.json"
+            print_info "  vim mappings.json"
             exit 1
         fi
         
@@ -169,8 +169,8 @@ case "$MODE" in
         print_success "✅ Client deployed successfully!"
         print_info "📋 Client configuration:"
         print_info "   🌐 Server: $SERVER_WS_URL"
-        print_info "   🆔 Client ID: $CLIENT_ID"
-        print_info "   🎯 Local Target: ${LOCAL_TARGET:-http://localhost:8080}"
+        print_info "   📝 Config: mappings.json"
+        print_info "   🎯 Local Target: configured in mappings.json"
         ;;
         
     *)
