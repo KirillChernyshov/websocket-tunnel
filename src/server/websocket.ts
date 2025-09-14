@@ -1,6 +1,6 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import { v4 as uuidv4 } from 'uuid';
-import { TunnelMessage, HttpResponsePayload } from '../shared/types';
+import { TunnelMessage, HttpResponsePayload, ClientMapping } from '../shared/types';
 import { ClientManager } from './client-manager';
 
 export class TunnelWebSocketServer {
@@ -79,15 +79,17 @@ export class TunnelWebSocketServer {
   private handleRegister(ws: WebSocket, message: TunnelMessage) {
     const clientId = message.clientId || uuidv4();
     const clientName = message.payload?.name || 'Unknown Client';
+    const mappings = message.payload?.mappings || [];
     
     const clientInfo = this.clientManager.registerClient(clientId, ws, {
       name: clientName,
+      mappings: mappings,
     });
     
     console.log(`✅ Client registered: ${clientInfo.id} (${clientInfo.name})`);
     
     // Display routing information for the new client
-    this.displayClientRoutingInfo(clientInfo.id, clientInfo.name);
+    this.displayClientRoutingInfo(clientInfo.id, clientInfo.name, mappings);
     
     // Confirm registration
     this.sendMessage(ws, {
@@ -99,19 +101,46 @@ export class TunnelWebSocketServer {
     });
   }
 
-  private displayClientRoutingInfo(clientId: string, clientName: string) {
+  private displayClientRoutingInfo(clientId: string, clientName: string, mappings: ClientMapping[]) {
     console.log('');
     console.log('📡 ========================================');
     console.log(`📡 НОВЫЙ КЛИЕНТ ПОДКЛЮЧЕН: ${clientName}`);
     console.log('📡 ========================================');
     console.log('');
     console.log(`🆔 Client ID: ${clientId}`);
-    console.log(`📍 Постоянный адрес: http://localhost:${this.httpPort}/client/${clientId}`);
-    console.log('');
-    console.log('🌐 Примеры обращения к клиенту:');
-    console.log(`   curl "http://localhost:${this.httpPort}/client/${clientId}/api/status"`);
-    console.log(`   curl "http://localhost:${this.httpPort}/client/${clientId}/health"`);
-    console.log(`   curl "http://localhost:${this.httpPort}/client/${clientId}/"`);
+    
+    if (mappings && mappings.length > 0) {
+      console.log(`🗺️  Зарегистрировано ${mappings.length} мапингов:`);
+      console.log('');
+      
+      mappings.forEach((mapping, index) => {
+        console.log(`   ${index + 1}. ${mapping.prefix.toUpperCase()}:`);
+        console.log(`      📍 Адрес: http://localhost:${this.httpPort}/client/${clientId}/${mapping.prefix}`);
+        console.log(`      🎯 Цель:  ${mapping.target}`);
+        console.log(`      📝 Описание: ${mapping.description}`);
+        console.log('');
+      });
+      
+      console.log(`   📁 DEFAULT (fallback):`);
+      console.log(`      📍 Адрес: http://localhost:${this.httpPort}/client/${clientId}/`);
+      console.log(`      📝 Описание: Основное приложение (fallback)`);
+      console.log('');
+      
+      console.log('🧪 Примеры тестирования мапингов:');
+      mappings.forEach(mapping => {
+        console.log(`   curl "http://localhost:${this.httpPort}/client/${clientId}/${mapping.prefix}/api/info"`);
+        console.log(`   curl "http://localhost:${this.httpPort}/client/${clientId}/${mapping.prefix}/health"`);
+      });
+      console.log(`   curl "http://localhost:${this.httpPort}/client/${clientId}/health" # fallback`);
+    } else {
+      console.log(`📍 Единый адрес: http://localhost:${this.httpPort}/client/${clientId}`);
+      console.log('');
+      console.log('🌐 Примеры обращения к клиенту:');
+      console.log(`   curl "http://localhost:${this.httpPort}/client/${clientId}/api/status"`);
+      console.log(`   curl "http://localhost:${this.httpPort}/client/${clientId}/health"`);
+      console.log(`   curl "http://localhost:${this.httpPort}/client/${clientId}/"`);
+    }
+    
     console.log('');
     console.log('🔍 Управление клиентом:');
     console.log(`   curl "http://localhost:${this.httpPort}/clients/${clientId}"`);
@@ -125,6 +154,12 @@ export class TunnelWebSocketServer {
     // Show total connected clients
     const totalClients = this.clientManager.getConnectedClients().length;
     console.log(`📈 Всего подключено клиентов: ${totalClients}`);
+    
+    if (mappings && mappings.length > 0) {
+      const totalMappings = this.clientManager.getStats().totalMappings;
+      console.log(`🗺️  Всего мапингов в системе: ${totalMappings}`);
+    }
+    
     console.log('📡 ========================================');
     console.log('');
   }

@@ -1,10 +1,12 @@
 import { ClientManager } from './client-manager';
-import { HttpRequestPayload, HttpResponsePayload } from '../shared/types';
+import { HttpRequestPayload, HttpResponsePayload, ClientMapping } from '../shared/types';
 
 interface RouteInfo {
   clientId?: string;
   targetPath: string;
   routeType: 'specific' | 'balanced';
+  mapping?: ClientMapping; // Какой мапинг использовать
+  mappingPrefix?: string;  // Префикс мапинга для логирования
 }
 
 export class HttpProxyHandler {
@@ -19,7 +21,8 @@ export class HttpProxyHandler {
   /**
    * Parse the incoming request path to determine routing strategy
    * Routes:
-   * - /client/{clientId}/* -> route to specific client
+   * - /client/{clientId}/{mappingPrefix}/* -> route to specific client with mapping
+   * - /client/{clientId}/* -> route to specific client (default mapping)
    * - /api/* -> balanced routing across all clients  
    * - /* -> balanced routing (default)
    */
@@ -29,11 +32,31 @@ export class HttpProxyHandler {
     
     if (clientRouteMatch) {
       const clientId = clientRouteMatch[1];
-      const targetPath = clientRouteMatch[2] || '/';
+      const remainingPath = clientRouteMatch[2] || '/';
       
+      // Проверяем, есть ли мапинги у клиента
+      const client = this.clientManager.getClient(clientId);
+      if (client && client.mappings && client.mappings.length > 0) {
+        // Ищем соответствующий мапинг
+        const mapping = this.findBestMapping(remainingPath, client.mappings);
+        if (mapping) {
+          // Убираем префикс мапинга из пути
+          const targetPath = this.stripMappingPrefix(remainingPath, mapping.prefix);
+          
+          return {
+            clientId,
+            targetPath,
+            routeType: 'specific',
+            mapping,
+            mappingPrefix: mapping.prefix
+          };
+        }
+      }
+      
+      // Fallback: используем основной мапинг
       return {
         clientId,
-        targetPath,
+        targetPath: remainingPath,
         routeType: 'specific'
       };
     }
@@ -43,6 +66,37 @@ export class HttpProxyHandler {
       targetPath: path,
       routeType: 'balanced'
     };
+  }
+
+  /**
+   * Найти лучший мапинг для пути
+   */
+  private findBestMapping(path: string, mappings: ClientMapping[]): ClientMapping | null {
+    // Убираем начальный слеш для сравнения
+    const cleanPath = path.startsWith('/') ? path.substring(1) : path;
+    
+    // Ищем точные совпадения префиксов (самые длинные префиксы сначала)
+    const sortedMappings = mappings
+      .filter(m => cleanPath.startsWith(m.prefix + '/') || cleanPath === m.prefix || cleanPath.startsWith(m.prefix))
+      .sort((a, b) => b.prefix.length - a.prefix.length);
+    
+    return sortedMappings[0] || null;
+  }
+
+  /**
+   * Убрать префикс мапинга из пути
+   */
+  private stripMappingPrefix(path: string, prefix: string): string {
+    // Убираем начальный слеш
+    const cleanPath = path.startsWith('/') ? path.substring(1) : path;
+    
+    if (cleanPath.startsWith(prefix)) {
+      const remaining = cleanPath.substring(prefix.length);
+      // Возвращаем путь с ведущим слешем
+      return remaining.startsWith('/') ? remaining : '/' + remaining;
+    }
+    
+    return path;
   }
 
   public async handleRequest(request: {
@@ -69,7 +123,11 @@ export class HttpProxyHandler {
         throw new Error(`Client '${route.clientId}' (${client.name}) is not connected`);
       }
 
-      console.log(`🎯 Routing request ${request.id} to specific client ${client.name} (${client.id})`);
+      if (route.mapping) {
+        console.log(`🎯 Routing request ${request.id} to client ${client.name} (${client.id}) via mapping "${route.mappingPrefix}" -> ${route.mapping.target}`);
+      } else {
+        console.log(`🎯 Routing request ${request.id} to client ${client.name} (${client.id}) via default mapping`);
+      }
     } else {
       // Balanced routing across all clients
       client = this.clientManager.getAvailableClient();
@@ -81,19 +139,26 @@ export class HttpProxyHandler {
       console.log(`🔄 Routing request ${request.id} to balanced client ${client.name} (${client.id})`);
     }
 
-    // Prepare the request payload with the target path
+    // Prepare the request payload with the target path and mapping info
     const requestPayload: HttpRequestPayload = {
       method: request.method,
       path: route.targetPath, // Use the parsed target path
       headers: this.sanitizeHeaders(request.headers),
       body: request.body,
       query: request.query || {},
+      targetMapping: route.mapping?.target, // Передаем целевой URL мапинга
     };
 
     // Create a promise that will be resolved when we get the response
     return new Promise<HttpResponsePayload>((resolve, reject) => {
       // Add to pending requests
-      this.clientManager.addPendingRequest(request.id, client.id, resolve, reject);
+      this.clientManager.addPendingRequest(request.id, client.id, (response) => {
+        // Добавляем информацию о мапинге в ответ
+        if (route.mapping) {
+          response.mapping = `${route.mappingPrefix} -> ${route.mapping.target}`;
+        }
+        resolve(response);
+      }, reject);
 
       // Send the request through WebSocket
       const success = this.sendRequestToClient(client.id, request.id, requestPayload);
@@ -209,6 +274,7 @@ export class HttpProxyHandler {
       clientStats: this.clientManager.getStats(),
       supportedRoutes: [
         '/client/{clientId}/* - Route to specific client',
+        '/client/{clientId}/{mapping}/* - Route to specific client mapping',
         '/api/* - Balanced routing across all clients',
         '/* - Default balanced routing'
       ]

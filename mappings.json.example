@@ -1,0 +1,35 @@
+{
+  "client": {
+    "id": "my-dev-pc",
+    "name": "Development PC",
+    "defaultTarget": "http://localhost:8080"
+  },
+  "mappings": [
+    {
+      "prefix": "frontend",
+      "target": "http://localhost:3000",
+      "description": "React/Vue Frontend",
+      "enabled": true
+    },
+    {
+      "prefix": "api",
+      "target": "http://localhost:5000", 
+      "description": "Backend API",
+      "enabled": true,
+      "healthCheck": "/health"
+    },
+    {
+      "prefix": "admin",
+      "target": "http://localhost:9000",
+      "description": "Admin Dashboard", 
+      "enabled": false,
+      "protected": true
+    }
+  ],
+  "options": {
+    "enableFallback": true,
+    "healthCheckInterval": 30000,
+    "retryFailedRequests": true,
+    "maxRetries": 3
+  }
+}

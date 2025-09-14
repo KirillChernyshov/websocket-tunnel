@@ -22,7 +22,12 @@
     "pm2:monitor": "pm2 monit",
     "pm2:delete": "pm2 delete all",
     "deploy:server": "npm run build && pm2 start ecosystem.config.json",
-    "deploy:client": "npm run build && pm2 start ecosystem.client.json"
+    "deploy:client": "npm run build && pm2 start ecosystem.client.json",
+    "test:mappings": "./test-mappings.sh",
+    "start:multi-servers": "./start-multi-servers.sh",
+    "fix:deps": "./fix-dependencies.sh",
+    "mappings": "./manage-mappings.sh",
+    "test:config": "./test-json-config.sh"
   },
   "keywords": [
     "websocket",

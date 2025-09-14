@@ -15,6 +15,15 @@ build/
 .env.test.local
 .env.production.local
 
+# Configuration files with sensitive data
+mappings.json
+
+# Temporary removal folder
+temp-removal/
+
+# Generated PM2 configs
+ecosystem.*.generated.json
+
 # IDE files
 .vscode/
 .idea/

@@ -1,5 +1,5 @@
 import { WebSocket } from 'ws';
-import { ClientInfo, HttpResponsePayload } from '../shared/types';
+import { ClientInfo, HttpResponsePayload, ClientMapping } from '../shared/types';
 
 interface PendingRequest {
   id: string;
@@ -19,7 +19,14 @@ export class ClientManager {
   private requestTimeout: number = 30000; // 30 seconds
   private heartbeatTimeout: number = 90000; // 90 seconds (3 missed heartbeats)
 
-  public registerClient(clientId: string, ws: WebSocket, options: { name?: string } = {}): RegisteredClient {
+  public registerClient(
+    clientId: string, 
+    ws: WebSocket, 
+    options: { 
+      name?: string;
+      mappings?: ClientMapping[];
+    } = {}
+  ): RegisteredClient {
     // Clean up existing client with same ID
     if (this.clients.has(clientId)) {
       this.unregisterClient(this.clients.get(clientId)!.ws);
@@ -31,11 +38,23 @@ export class ClientManager {
       connected: true,
       lastHeartbeat: Date.now(),
       requestCount: 0,
+      mappings: options.mappings || [],
       ws,
     };
 
     this.clients.set(clientId, client);
+    
+    // Логируем информацию о регистрации
     console.log(`📝 Client registered: ${client.name} (${clientId})`);
+    
+    if (client.mappings && client.mappings.length > 0) {
+      console.log(`🗺️  Mappings registered for ${client.name}:`);
+      client.mappings.forEach((mapping, index) => {
+        console.log(`   ${index + 1}. /${mapping.prefix}/* -> ${mapping.target} (${mapping.description})`);
+      });
+    } else {
+      console.log(`📁 Client ${client.name} using default mapping only`);
+    }
     
     return client;
   }
@@ -71,6 +90,27 @@ export class ClientManager {
 
     // Simple round-robin: return client with least requests
     return connectedClients.reduce((min, client) => 
+      client.requestCount < min.requestCount ? client : min
+    );
+  }
+
+  /**
+   * Получить клиента, который поддерживает определенный мапинг
+   */
+  public getClientWithMapping(mappingPrefix: string): RegisteredClient | null {
+    const connectedClients = this.getConnectedClients();
+    
+    // Ищем клиента с подходящим мапингом
+    const clientsWithMapping = connectedClients.filter(client => 
+      client.mappings && client.mappings.some(mapping => mapping.prefix === mappingPrefix)
+    );
+    
+    if (clientsWithMapping.length === 0) {
+      return null;
+    }
+
+    // Возвращаем клиента с наименьшим количеством запросов
+    return clientsWithMapping.reduce((min, client) => 
       client.requestCount < min.requestCount ? client : min
     );
   }
@@ -155,18 +195,57 @@ export class ClientManager {
     });
   }
 
+  /**
+   * Получить детальную информацию о мапингах всех клиентов
+   */
+  public getMappingInfo() {
+    const mappingInfo: { [clientId: string]: ClientMapping[] } = {};
+    
+    this.clients.forEach((client, clientId) => {
+      if (client.mappings && client.mappings.length > 0) {
+        mappingInfo[clientId] = client.mappings;
+      }
+    });
+    
+    return mappingInfo;
+  }
+
+  /**
+   * Получить список всех доступных префиксов мапингов
+   */
+  public getAvailableMappingPrefixes(): string[] {
+    const prefixes = new Set<string>();
+    
+    this.getConnectedClients().forEach(client => {
+      if (client.mappings) {
+        client.mappings.forEach(mapping => {
+          prefixes.add(mapping.prefix);
+        });
+      }
+    });
+    
+    return Array.from(prefixes);
+  }
+
   public getStats() {
+    const mappingStats = this.getMappingInfo();
+    const totalMappings = Object.values(mappingStats).reduce((sum, mappings) => sum + mappings.length, 0);
+    
     return {
       totalClients: this.clients.size,
       connectedClients: this.getConnectedClients().length,
       pendingRequests: this.pendingRequests.size,
+      totalMappings,
+      availableMappingPrefixes: this.getAvailableMappingPrefixes(),
       clients: Array.from(this.clients.values()).map(c => ({
         id: c.id,
         name: c.name,
         connected: c.connected,
         lastHeartbeat: c.lastHeartbeat,
         requestCount: c.requestCount,
-      }))
+        mappings: c.mappings || [],
+      })),
+      mappingDetails: mappingStats
     };
   }
 }

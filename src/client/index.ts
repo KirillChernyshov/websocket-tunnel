@@ -1,15 +1,119 @@
 import { TunnelWebSocketClient } from './websocket';
 import { HttpClient } from './http-client';
-import { v4 as uuidv4 } from 'uuid';
+import { ClientMapping } from '../shared/types';
+import * as fs from 'fs';
+import * as path from 'path';
 
-// Configuration
+// Интерфейс для JSON конфигурации
+interface MappingConfig {
+  client: {
+    id: string;
+    name: string;
+    defaultTarget: string;
+  };
+  mappings: Array<{
+    prefix: string;
+    target: string;
+    description: string;
+    enabled: boolean;
+    healthCheck?: string;
+    protected?: boolean;
+  }>;
+  options: {
+    enableFallback: boolean;
+    healthCheckInterval: number;
+    retryFailedRequests: boolean;
+    maxRetries: number;
+  };
+}
+
+// Функция для загрузки конфигурации
+function loadMappingConfig(): MappingConfig {
+  const configPath = path.join(process.cwd(), 'mappings.json');
+  const examplePath = path.join(process.cwd(), 'mappings.json.example');
+  
+  // Если файл не существует - показываем четкую ошибку
+  if (!fs.existsSync(configPath)) {
+    console.log('');
+    console.log('❌ ОШИБКА: Файл mappings.json не найден!');
+    console.log('');
+    console.log('🔧 Для настройки клиента выполните:');
+    console.log('');
+    console.log('   1. Скопируйте пример конфигурации:');
+    console.log('      cp mappings.json.example mappings.json');
+    console.log('');
+    console.log('   2. Отредактируйте mappings.json под свои нужды:');
+    console.log('      - Укажите уникальный CLIENT_ID');
+    console.log('      - Настройте адреса ваших приложений');
+    console.log('      - Включите/выключите нужные мапинги');
+    console.log('');
+    console.log('   3. Перезапустите клиент');
+    console.log('');
+    
+    if (fs.existsSync(examplePath)) {
+      console.log('📄 Пример конфигурации доступен в: mappings.json.example');
+    } else {
+      console.log('⚠️  Файл mappings.json.example не найден!');
+    }
+    
+    console.log('');
+    console.log('💡 mappings.json должен содержать настройки ваших приложений.');
+    console.log('   БЕЗ НЕГО КЛИЕНТ НЕ ЗНАЕТ КУДА МАПИТЬ ЗАПРОСЫ!');
+    console.log('');
+    process.exit(1);
+  }
+  
+  try {
+    const configData = fs.readFileSync(configPath, 'utf8');
+    const config = JSON.parse(configData);
+    console.log(`📄 Загружена конфигурация из: ${configPath}`);
+    
+    // Валидация конфигурации
+    if (!config.client || !config.client.id || !config.client.name) {
+      throw new Error('Отсутствует секция client или обязательные поля id/name');
+    }
+    
+    if (!config.mappings || !Array.isArray(config.mappings)) {
+      throw new Error('Отсутствует секция mappings или она не является массивом');
+    }
+    
+    return config;
+  } catch (error) {
+    console.log('');
+    console.log('❌ ОШИБКА В КОНФИГУРАЦИИ mappings.json:');
+    console.log('');
+    console.log(`   ${error}`);
+    console.log('');
+    console.log('🔧 Исправьте JSON синтаксис или пересоздайте файл:');
+    console.log('   1. rm mappings.json');
+    console.log('   2. cp mappings.json.example mappings.json');
+    console.log('   3. Отредактируйте новый файл');
+    console.log('');
+    process.exit(1);
+  }
+}
+
+// Загружаем конфигурацию
+const MAPPING_CONFIG = loadMappingConfig();
+
+// Фильтруем только активные мапинги
+const activeMappings: ClientMapping[] = MAPPING_CONFIG.mappings
+  .filter(mapping => mapping.enabled)
+  .map(mapping => ({
+    prefix: mapping.prefix,
+    target: mapping.target,
+    description: mapping.description
+  }));
+
+// Основная конфигурация
 const CONFIG = {
   SERVER_URL: process.env.SERVER_WS_URL || 'ws://localhost:3001',
-  LOCAL_TARGET: process.env.LOCAL_TARGET || 'http://localhost:8080',
-  CLIENT_ID: process.env.CLIENT_ID || uuidv4(),
-  CLIENT_NAME: process.env.CLIENT_NAME || `PC-Client-${Date.now()}`,
-  RECONNECT_INTERVAL: 5000, // 5 seconds
-  HEARTBEAT_INTERVAL: 30000, // 30 seconds
+  CLIENT_ID: MAPPING_CONFIG.client.id,
+  CLIENT_NAME: MAPPING_CONFIG.client.name,
+  LOCAL_TARGET: MAPPING_CONFIG.client.defaultTarget,
+  RECONNECT_INTERVAL: parseInt(process.env.RECONNECT_INTERVAL || '5000'),
+  HEARTBEAT_INTERVAL: parseInt(process.env.HEARTBEAT_INTERVAL || '30000'),
+  MAPPINGS: activeMappings,
 };
 
 // Helper function to get HTTP server URL from WebSocket URL
@@ -18,7 +122,6 @@ function getHttpServerUrl(wsUrl: string): string {
     const url = new URL(wsUrl);
     const protocol = url.protocol === 'wss:' ? 'https:' : 'http:';
     const port = url.port || (url.protocol === 'wss:' ? '443' : '80');
-    // Default HTTP port is usually WS_PORT - 1 (3000 vs 3001)
     const httpPort = url.port === '3001' ? '3000' : (parseInt(port) - 1).toString();
     return `${protocol}//${url.hostname}:${httpPort}`;
   } catch {
@@ -28,78 +131,131 @@ function getHttpServerUrl(wsUrl: string): string {
 
 const HTTP_SERVER_URL = getHttpServerUrl(CONFIG.SERVER_URL);
 
-console.log('🚀 Starting WebSocket Tunnel Client');
-console.log(`📡 Server URL: ${CONFIG.SERVER_URL}`);
-console.log(`🎯 Local Target: ${CONFIG.LOCAL_TARGET}`);
+console.log('🚀 Запуск WebSocket Tunnel Client');
+console.log(`📡 Сервер: ${CONFIG.SERVER_URL}`);
 console.log(`🆔 Client ID: ${CONFIG.CLIENT_ID}`);
-console.log(`📝 Client Name: ${CONFIG.CLIENT_NAME}`);
+console.log(`📝 Имя: ${CONFIG.CLIENT_NAME}`);
+console.log(`🎯 Основная цель: ${CONFIG.LOCAL_TARGET}`);
 
-// Initialize components
-const httpClient = new HttpClient(CONFIG.LOCAL_TARGET);
+if (CONFIG.MAPPINGS.length > 0) {
+  console.log(`🗺️  Настроено ${CONFIG.MAPPINGS.length} активных мапингов:`);
+  CONFIG.MAPPINGS.forEach((mapping, index) => {
+    console.log(`   ${index + 1}. ${mapping.prefix} → ${mapping.target} (${mapping.description})`);
+  });
+} else {
+  console.log('');
+  console.log('⚠️  НЕТ АКТИВНЫХ МАПИНГОВ!');
+  console.log('');
+  console.log('🔧 Все запросы будут направляться в defaultTarget:');
+  console.log(`   ${CONFIG.LOCAL_TARGET}`);
+  console.log('');
+  console.log('💡 Чтобы настроить мапинги:');
+  console.log('   1. Отредактируйте mappings.json');
+  console.log('   2. Включите нужные мапинги (enabled: true)');
+  console.log('   3. Перезапустите клиент');
+  console.log('');
+}
+
+// Create HTTP clients for each mapping
+const httpClients = new Map<string, HttpClient>();
+
+// Main client (for default mapping and fallback)
+const mainHttpClient = new HttpClient(CONFIG.LOCAL_TARGET);
+httpClients.set('default', mainHttpClient);
+
+// Additional clients for each mapping
+CONFIG.MAPPINGS.forEach(mapping => {
+  httpClients.set(mapping.target, new HttpClient(mapping.target));
+});
+
+// Initialize WebSocket client
 const wsClient = new TunnelWebSocketClient(CONFIG.SERVER_URL, {
   clientId: CONFIG.CLIENT_ID,
   clientName: CONFIG.CLIENT_NAME,
   reconnectInterval: CONFIG.RECONNECT_INTERVAL,
   heartbeatInterval: CONFIG.HEARTBEAT_INTERVAL,
+  mappings: CONFIG.MAPPINGS,
 });
 
 // Function to display routing information
 function displayRoutingInfo() {
   console.log('');
   console.log('🎯 ========================================');
-  console.log('🎯 ТУННЕЛЬ ГОТОВ К ИСПОЛЬЗОВАНИЮ!');
+  console.log('🎯 ТУННЕЛЬ ЗАПУЩЕН!');
   console.log('🎯 ========================================');
   console.log('');
   console.log(`📍 Постоянный адрес клиента:`);
   console.log(`   ${HTTP_SERVER_URL}/client/${CONFIG.CLIENT_ID}`);
   console.log('');
-  console.log('🌐 Примеры использования:');
-  console.log('');
-  console.log('  📄 Статические файлы:');
-  console.log(`     ${HTTP_SERVER_URL}/client/${CONFIG.CLIENT_ID}/index.html`);
-  console.log(`     ${HTTP_SERVER_URL}/client/${CONFIG.CLIENT_ID}/api/status`);
-  console.log('');
-  console.log('  🔄 API запросы:');
-  console.log(`     GET  ${HTTP_SERVER_URL}/client/${CONFIG.CLIENT_ID}/api/users`);
-  console.log(`     POST ${HTTP_SERVER_URL}/client/${CONFIG.CLIENT_ID}/api/data`);
-  console.log(`     PUT  ${HTTP_SERVER_URL}/client/${CONFIG.CLIENT_ID}/api/settings`);
-  console.log('');
-  console.log('  🧪 Тестовые запросы:');
-  console.log(`     curl "${HTTP_SERVER_URL}/client/${CONFIG.CLIENT_ID}/api/test"`);
-  console.log(`     curl "${HTTP_SERVER_URL}/client/${CONFIG.CLIENT_ID}/health"`);
-  console.log('');
-  console.log('  🔍 Управление клиентом:');
-  console.log(`     curl "${HTTP_SERVER_URL}/clients/${CONFIG.CLIENT_ID}"`);
-  console.log(`     curl "${HTTP_SERVER_URL}/client/${CONFIG.CLIENT_ID}/health"`);
-  console.log('');
-  console.log('  📊 Из браузера:');
-  console.log(`     ${HTTP_SERVER_URL}/client/${CONFIG.CLIENT_ID}/`);
-  console.log('');
-  console.log('⚖️  Балансированная маршрутизация (любой клиент):');
-  console.log(`     ${HTTP_SERVER_URL}/api/endpoint`);
-  console.log('');
-  console.log('📋 Информация о системе:');
-  console.log(`     ${HTTP_SERVER_URL}/clients           # Список всех клиентов`);
-  console.log(`     ${HTTP_SERVER_URL}/health            # Статус сервера`);
-  console.log(`     ${HTTP_SERVER_URL}/status            # Подробная информация`);
+  
+  if (CONFIG.MAPPINGS.length > 0) {
+    console.log('🗺️  Активные мапинги:');
+    console.log('');
+    
+    CONFIG.MAPPINGS.forEach(mapping => {
+      console.log(`   📁 ${mapping.prefix.toUpperCase()}:`);
+      console.log(`      ${HTTP_SERVER_URL}/client/${CONFIG.CLIENT_ID}/${mapping.prefix}/* → ${mapping.target}`);
+      console.log(`      ${mapping.description}`);
+      console.log('');
+    });
+    
+    console.log(`   📁 DEFAULT (fallback):`);
+    console.log(`      ${HTTP_SERVER_URL}/client/${CONFIG.CLIENT_ID}/* → ${CONFIG.LOCAL_TARGET}`);
+    console.log(`      Основное приложение`);
+    console.log('');
+  } else {
+    console.log('⚠️  ВНИМАНИЕ: НЕТ НАСТРОЕННЫХ МАПИНГОВ!');
+    console.log('');
+    console.log('🔄 Единственный доступный маршрут:');
+    console.log(`     ${HTTP_SERVER_URL}/client/${CONFIG.CLIENT_ID}/* → ${CONFIG.LOCAL_TARGET}`);
+    console.log('');
+    console.log('🔧 Для настройки мапингов отредактируйте mappings.json');
+    console.log('');
+  }
+  
+  console.log('🧪 Тестовые команды:');
+  console.log(`     curl "${HTTP_SERVER_URL}/client/${CONFIG.CLIENT_ID}/"`);
+  
+  if (CONFIG.MAPPINGS.length > 0) {
+    CONFIG.MAPPINGS.forEach(mapping => {
+      console.log(`     curl "${HTTP_SERVER_URL}/client/${CONFIG.CLIENT_ID}/${mapping.prefix}/"`);
+    });
+  }
+  
   console.log('');
   console.log('🎯 ========================================');
-  console.log(`🎯 Локальное приложение: ${CONFIG.LOCAL_TARGET}`);
-  console.log(`🎯 Доступно через туннель: ${HTTP_SERVER_URL}/client/${CONFIG.CLIENT_ID}`);
+  console.log(`🎯 Адрес: ${HTTP_SERVER_URL}/client/${CONFIG.CLIENT_ID}`);
+  console.log(`🎯 Мапингов: ${CONFIG.MAPPINGS.length} активных`);
   console.log('🎯 ========================================');
   console.log('');
 }
 
+// Function to get appropriate HTTP client for request
+function getHttpClientForRequest(payload: any): HttpClient {
+  if (payload.targetMapping) {
+    const client = httpClients.get(payload.targetMapping);
+    if (client) {
+      console.log(`🎯 Маршрут через мапинг: ${payload.targetMapping}`);
+      return client;
+    }
+  }
+  
+  console.log(`🎯 Маршрут через дефолт: ${CONFIG.LOCAL_TARGET}`);
+  return mainHttpClient;
+}
+
 // Handle incoming requests from the server
 wsClient.onRequest(async (requestId, payload) => {
-  console.log(`📨 Received request ${requestId}: ${payload.method} ${payload.path}`);
+  const mappingInfo = payload.targetMapping ? ` (${payload.targetMapping})` : ' (default)';
+  console.log(`📨 Запрос ${requestId}: ${payload.method} ${payload.path}${mappingInfo}`);
   
   try {
     const startTime = Date.now();
+    const httpClient = getHttpClientForRequest(payload);
     const response = await httpClient.makeRequest(payload);
     const duration = Date.now() - startTime;
     
-    console.log(`✅ Request ${requestId} completed: ${response.statusCode} (${duration}ms)`);
+    console.log(`✅ Запрос ${requestId} выполнен: ${response.statusCode} (${duration}ms)${mappingInfo}`);
     
     wsClient.sendResponse(requestId, {
       ...response,
@@ -107,7 +263,7 @@ wsClient.onRequest(async (requestId, payload) => {
     });
     
   } catch (error) {
-    console.error(`❌ Request ${requestId} failed:`, error);
+    console.error(`❌ Запрос ${requestId} ошибка:`, error);
     
     wsClient.sendError(requestId, {
       message: error instanceof Error ? error.message : 'Unknown error',
@@ -118,27 +274,32 @@ wsClient.onRequest(async (requestId, payload) => {
 
 // Handle connection events
 wsClient.onConnect(() => {
-  console.log('✅ Connected to tunnel server');
+  console.log('✅ Подключен к серверу туннеля');
 });
 
 wsClient.onDisconnect(() => {
-  console.log('❌ Disconnected from tunnel server');
-  console.log('🔄 Tunnel temporarily unavailable...');
+  console.log('❌ Отключен от сервера туннеля');
+  console.log('🔄 Туннель временно недоступен...');
 });
 
 wsClient.onError((error) => {
-  console.error('🚨 WebSocket error:', error);
+  console.error('🚨 WebSocket ошибка:', error);
 });
 
 wsClient.onRegister((confirmed) => {
   if (confirmed) {
-    console.log('✅ Successfully registered with server');
-    console.log(`🎉 Client "${CONFIG.CLIENT_NAME}" (${CONFIG.CLIENT_ID}) is now online!`);
+    console.log('✅ Успешно зарегистрирован на сервере');
+    console.log(`🎉 Клиент "${CONFIG.CLIENT_NAME}" (${CONFIG.CLIENT_ID}) онлайн!`);
     
-    // Display routing information after successful registration
+    if (CONFIG.MAPPINGS.length > 0) {
+      console.log(`🗺️  Зарегистрировано с ${CONFIG.MAPPINGS.length} активными мапингами`);
+    } else {
+      console.log('⚠️  Зарегистрировано БЕЗ активных мапингов (только default)');
+    }
+    
     displayRoutingInfo();
   } else {
-    console.log('📝 Registration requested...');
+    console.log('📝 Запрос регистрации отправлен...');
   }
 });
 
@@ -148,27 +309,26 @@ wsClient.connect();
 // Graceful shutdown
 process.on('SIGINT', () => {
   console.log('');
-  console.log('🛑 Shutting down client...');
-  console.log(`🔌 Tunnel ${HTTP_SERVER_URL}/client/${CONFIG.CLIENT_ID} will be unavailable`);
+  console.log('🛑 Остановка клиента...');
+  console.log(`🔌 Туннель ${HTTP_SERVER_URL}/client/${CONFIG.CLIENT_ID} станет недоступен`);
   wsClient.disconnect();
   process.exit(0);
 });
 
 process.on('SIGTERM', () => {
-  console.log('🛑 Shutting down client...');
+  console.log('🛑 Остановка клиента...');
   wsClient.disconnect();
   process.exit(0);
 });
 
-// Keep the process alive
 process.on('uncaughtException', (error) => {
-  console.error('💥 Uncaught exception:', error);
+  console.error('💥 Необработанное исключение:', error);
   process.exit(1);
 });
 
 process.on('unhandledRejection', (reason, promise) => {
-  console.error('💥 Unhandled rejection at:', promise, 'reason:', reason);
+  console.error('💥 Необработанный reject:', promise, 'причина:', reason);
   process.exit(1);
 });
 
-export { wsClient, httpClient };
+export { wsClient, httpClients, CONFIG, MAPPING_CONFIG };

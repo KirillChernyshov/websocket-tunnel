@@ -1,12 +1,13 @@
 import WebSocket from 'ws';
 import { v4 as uuidv4 } from 'uuid';
-import { TunnelMessage, HttpRequestPayload, HttpResponsePayload, ErrorPayload } from '../shared/types';
+import { TunnelMessage, HttpRequestPayload, HttpResponsePayload, ErrorPayload, ClientMapping } from '../shared/types';
 
 interface ClientConfig {
   clientId: string;
   clientName: string;
   reconnectInterval: number;
   heartbeatInterval: number;
+  mappings?: ClientMapping[]; // Добавляем поддержку мапингов
 }
 
 export class TunnelWebSocketClient {
@@ -136,14 +137,24 @@ export class TunnelWebSocketClient {
       }
     } else {
       // Server is requesting registration
+      const registrationPayload = {
+        name: this.config.clientName,
+        mappings: this.config.mappings || [], // Передаем мапинги при регистрации
+      };
+
+      if (this.config.mappings && this.config.mappings.length > 0) {
+        console.log(`📝 Registering with ${this.config.mappings.length} mappings:`);
+        this.config.mappings.forEach((mapping, index) => {
+          console.log(`   ${index + 1}. ${mapping.prefix} -> ${mapping.target} (${mapping.description})`);
+        });
+      }
+
       this.sendMessage({
         id: uuidv4(),
         type: 'register',
         timestamp: Date.now(),
         clientId: this.config.clientId,
-        payload: {
-          name: this.config.clientName,
-        },
+        payload: registrationPayload,
       });
       
       if (this.onRegisterHandler) {
@@ -273,5 +284,10 @@ export class TunnelWebSocketClient {
 
   public get registered(): boolean {
     return this.isRegistered;
+  }
+
+  // Получить информацию о мапингах
+  public get mappings(): ClientMapping[] {
+    return this.config.mappings || [];
   }
 }

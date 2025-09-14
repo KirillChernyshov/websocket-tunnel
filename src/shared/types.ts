@@ -13,6 +13,7 @@ export interface HttpRequestPayload {
   body?: string;
   query?: Record<string, any>;
   params?: Record<string, string>;
+  targetMapping?: string; // Какой мапинг использовать
 }
 
 export interface HttpResponsePayload {
@@ -20,6 +21,7 @@ export interface HttpResponsePayload {
   headers: Record<string, string>;
   body: string;
   duration?: number;
+  mapping?: string; // Какой мапинг был использован
 }
 
 export interface ErrorPayload {
@@ -28,12 +30,20 @@ export interface ErrorPayload {
   stack?: string;
 }
 
+// Новый интерфейс для мапинга
+export interface ClientMapping {
+  prefix: string;      // Префикс пути (например, "app1", "api")
+  target: string;      // Целевой URL (например, "http://localhost:8000")
+  description?: string; // Описание мапинга
+}
+
 export interface ClientInfo {
   id: string;
   name?: string;
   connected: boolean;
   lastHeartbeat: number;
   requestCount: number;
+  mappings?: ClientMapping[]; // Список мапингов клиента
 }
 
 export interface TunnelConfig {
@@ -45,7 +55,8 @@ export interface TunnelConfig {
   };
   client: {
     serverUrl: string;
-    localTarget: string;
+    localTarget: string; // Основной target (для обратной совместимости)
+    mappings?: ClientMapping[]; // Дополнительные мапинги
     reconnectInterval: number;
     heartbeatInterval: number;
     clientId: string;
